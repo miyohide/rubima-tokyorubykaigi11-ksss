@@ -1,0 +1,33 @@
+#! /usr/bin/env ruby
+
+lines = $stdin.read.each_line.to_a
+pre_start = false
+hiki = lines.map { |l|
+  if l.start_with?('```')
+    if pre_start
+      l.gsub!(/```/, '>>>')
+      pre_start = false
+    else
+      l.gsub!(/```.*/, '<<<')
+      pre_start = true
+    end
+  end
+
+  if !pre_start
+    l.sub!(/^(#+)\s/){ '!'*($1.length) + ' ' }
+    l.sub!(/^(-+)\s/){ '*'*($1.length) + ' ' }
+    l.gsub!(/\!\[([^\]]+)\]\(([^\)]+)\)/){ $2[0..3] == 'http' ? $2 : ('http://goos-lokka.heroku.com' + $2) } # picture
+    l.gsub!(/\[([^\]]+)\]\(([^\)]+)\)/, '[[\1|\2]]') # url
+    l.gsub!(/\*\*(.*)\*\*/, "'''\\1'''")
+    l.sub!(/^    /, ' ')
+    l.gsub!(/`([^`]+)`/, '\'\'\1\'\'')
+  end
+  l
+}
+# コードブロック中の空行を修正
+hiki.each_with_index { |l, idx|
+  if l == "\n" && hiki[idx-1].match(/^\s/) && hiki.size > idx+1 && hiki[idx+1].match(/^\s/)
+    hiki[idx] = " \n"
+  end
+}
+puts hiki.join

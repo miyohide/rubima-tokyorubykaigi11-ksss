@@ -1,0 +1,513 @@
+Rubyに型があると便利か
+=====
+
+! はじめに
+
+この記事は[[東京RubyKaigi11|http://regional.rubykaigi.org/tokyo11/]]の発表である、
+「Rubyに型があると便利か」[[(スライド)|https://speakerdeck.com/ksss/rubynixing-gaarutobian-li-ka]][[(動画)|https://www.youtube.com/watch?v=HwdWbJxLRdE]]
+を元に、るびま用に描き起こしたものです。
+
+[[TypeStruct|https://github.com/ksss/type_struct]]というgemの紹介と解説記事になります。
+
+! TypeStructのきほん
+
+TypeStructはRuby組み込みのStructをベースに機能を拡張したものです。
+
+ひとことで言うと「C言語やgo-langのstructをRubyで再現したもの」と言えます。
+
+実際に、TypeStructはgolangとcrystal-langの影響を受けています。
+
+!! 定義
+
+''TypeStruct.new''で新たにclassを定義します。
+
+定義はRubyのコードになっているので、
+Rubyのコード上ならどこにでも書けます。
+
+<<<
+NewClassName = TypeStruct.new(
+  key_1: Integer,
+  key_2: String,
+)
+>>>
+
+これで''NewClassName''というclassが定義さたことになります。
+
+どこか他言語を想起させる形ですね。
+
+渡したHashのkeyはそのままメンバー名に、valueはclassチェック時に使われます。
+
+これがTypeStructの型定義文になります。
+
+こだわっている点としては、途中で型定義を変更できるAPIを用意していないことです。
+
+理由は、動的にメンバーを追加できるようにしてしまうと、
+class定義がドキュメントとして信頼できなくなってしまうためです。
+
+「最初に定義したものしかありえない」
+
+こう決まっているからこそ、class定義が信頼できるドキュメントとして機能するようにしています。
+
+デメリットとして、linked-listのような再帰的な定義にできなくなるのが課題です。
+
+!! 作成・代入
+
+インスタンス作成時には、最初に定義したclassを''new''するだけです。
+
+インスタンス作成後も最初の定義にそっている限り代入もできます。
+
+<<<
+foo = NewClassName.new(
+  key_1: 123,
+  key_2: 'hello',
+)
+p foo # #<NewClassName key_1=123, key_2="hello">
+p foo.key_1 #=> 123
+p foo.key_2 #=> 'hello'
+
+foo.key_1 = 0
+foo.key_2 = 'world'
+p foo #<NewClassName key_1=0, key_2="world">
+p foo.key_1 #=> 0
+p foo.key_2 #=> 'world'
+>>>
+
+値を参照して、代入できる。
+型定義に沿っていれば、TypeStructは、ただのStructとそれほど差はありません。
+
+ただ、インスタンス作成時も型定義にそっていなければならないので「インスタンス作成時は''nil''を入れておいて、
+後で定義通りの値を入れよう」といったことが'''できません'''。
+
+理由は、一瞬でも定義とは違う値が入ることを許してしまうと、
+その一瞬は定義から外れた値が入っていることになるので、
+定義の意味がなくなってしまうからです。
+
+!! 例外
+
+型定義にそっていない値でインスタンス化すると、エラーになります。
+
+途中の代入でも型定義に合っていなければ同じくエラーになります。
+
+<<<
+p NewClassName.new(
+  key_1: '123',
+  key_2: 'hello',
+)
+# TypeStruct::MultiTypeError:
+# ...:in TypeError NewClassName#key_1 expect Integer got "123"
+
+foo = NewClassName.new(
+  key_1: 123,
+  key_2: 'hello',
+)
+foo.key_1 = '123'
+#=> TypeError: NewClassName#key_1 expect Integer got "123"
+>>>
+
+このエラーこそTypeStructの真骨頂と言えるでしょう。
+
+実行時でのエラーチェックにはなりますが、想定していなかった挙動を、エラーという形で検知できます。
+
+「実行時にテストしているようなもの」とも言い換えられます。
+
+ところで、''TypeStruct::MultiTypeError''と''TypeError''が出てきました。
+
+TypeErrorはRubyの組み込みclassですが、名前がType*なのであえて使っています。
+
+MultiTypeErrorは何でしょうか。
+これは、もし複数の型チェックエラーがあった場合、全ての情報を出したいという要求から生まれました。
+
+MultiTypeErrorにより、複数の型エラーがあった場合、全てのエラーを列挙してくれるので、
+一つなおしては実行してエラーを確認してまた一つなおす。
+といったストレスを緩和します。
+
+TypeStructは、ドキュメント化として読み手にもメリットがあり、デバッグのしやすさに力を入れているので書き手にもメリットがあるライブラリーなのです。
+
+! サポートclass
+
+TypeStructにはその機能をサポートするためのclassがいくつかあり、
+よく使うのがこの''TypeStruct::ArrayOf''と''TypeStruct::Union''の二つのclassです。
+
+!! ArrayOf
+
+''ArrayOf''は「〜のArray」を表すもので、''ArrayOf.new(String)''とすると、「StringのArray」という型であることをTypeStructで定義できるようになります。
+
+<<<
+Name = TypeStruct.new(
+  values: TypeStruct::ArrayOf.new(String)
+)
+name = Name.new(values: ['foo', 'bar', 'baz'])
+
+p name.values
+#=> ["foo", "bar", "baz"]
+
+name.values = [1, 2, 3]
+#=> TypeError: Name#values expect TypeStruct::ArrayOf(String) got [1, 2, 3]
+>>>
+
+''require 'type_struct/ext'''とすると''ArrayOf''はメソッドとして定義されるようになり、''ArrayOf(String)''のように使えます。
+ネームスペースを消費するので別途requireすると省略できるようにしています。
+
+!! Union
+
+Unionは「AかBのどちらかのうちの一つ」を表す型です。
+
+もっとも使う頻度が高いのは、''true''か''false''がありえるメンバーと、''nil''がありえるメンバーでしょう。
+
+<<<
+Name = TypeStruct.new(
+  is_show: TypeStruct::Union.new(true, false), # trueもしくはfalse
+  value: TypeStruct::Union.new(String, nil), # Stringもしくはnil
+)
+name = Name.new(
+  is_show: true,
+  value: nil,
+)
+p name.value = 'ksss' #=> 'ksss'
+p name.is_show = nil
+#=> TypeError: Name#is_show expect #<Union true|false> got nil
+>>>
+
+このように、複数の型がありえるメンバーに有効なのがUnionです。
+
+上級者向け機能として、''using TypeStruct::Union::Ext''とすると、''Class#|''メソッドが定義され、以下の様な書き方ができるようになります。
+
+<<<
+using TypeStruct::Union::Ext
+Foo = TypeStruct.new(
+  num: Integer | nil #=> Integerもしくはnil
+  name: Regexp | String #=> RegexpもしくはString
+)
+>>>
+
+以上のように、ArrayOfとUnionを使うことで様々な型をTypeStructで表現できるようになります。
+
+! from_hash
+
+TypeStructをさらに強力にする機能が、このfrom_hashです。
+
+HashオブジェクトをTypeStructのオブジェクトに変換します。そして、変換は再帰的に行われます。
+
+これは、Web APIや設定ファイルなどの外部情報について、
+TypeStructのメリット(意味ある名前・期待した値・ドキュメント化)を享受できるようにと開発しました。
+
+!! from_hashの使用前
+
+例として、Railsで組んだWeb API実装する場合を考えます。
+丸や三角などの図形を様々に配置して、配置情報を保存するアプリケーションです。
+
+それぞれの図形には図形のID・X,Y座標・大きさ・回転角度などの情報を持っています。
+
+これらの情報はJSON形式でクライアントからバックエンドへと送られます。
+
+送られたJSONは保存され、JSONの情報を元に一枚の画像として合成され、SNSなどでシェアできる。
+そんなアプリケーションです。
+
+この「JSONの情報を元に、一枚の画像として合成され」の部分ではJSON文字列をRubyでparseしてループを回し、それぞれのIDから図形画像を参照して座標情報から合成する。
+といったプログラムが想像できます。
+
+<<<
+composition = Composition.new
+json["layers"].each do |layer|
+  layer["figures"].each do |figure|
+    case figure["type"]
+    when "circle"
+      circle = Circle.find(figure["circle_id"])
+      image = circle.download
+      composition.add(image, figure["position"])
+    when "triangle"
+      # ...
+    when "square"
+      # ...
+    end
+  end
+end
+composition.to_png
+>>>
+
+こんなプログラムで怖いのは、typoによるミスではないでしょうか。
+
+''Hash#[]''ではtypoは''nil''として扱われます。
+ここでtypoしてしまうと、「クライアント側からの値がおかしい」のか「JSONの順番を間違えた」のかなどと考えてデバッグしている内に「ただのtypoだった」というオチで時間を取られてしまったという経験はないでしょうか。
+''Hash#[]''でのtypoは[[did_you_mean|https://github.com/yuki24/did_you_mean]]でも対応できません。
+
+「typo対策なら''Hash#fetch''がある」は良い案です。
+typoしたらKeyErrorとして教えてくれますし、did_you_meanも最新版では対応されています。{{fn('提案したのオレオレ https://github.com/yuki24/did_you_mean/pull/71')}}
+しかしながらプログラムの見た目は''obj.fetch("key")''ばかりになります。
+case文では自動的に''===''メソッドが使われます。
+「数字を期待していたが文字列が来ていた」のようなケースは防げません。
+
+!! from_hash使用後
+
+そこでTypeStructの''from_hash''を使います。
+
+まず型定義を用意します。
+
+<<<
+require 'type_struct/ext'
+module Type
+  using TypeStruct::Union::Ext
+  Position = TypeStruct.new(
+    x: Numeric,
+    y: Numeric,
+    width: Numeric,
+    height: Numeric,
+    rotation: Numeric,
+  )
+  Circle = TypeStruct.new(
+    type: "circle",
+    circle_id: Integer,
+    position: Position
+  )
+  Triangle = TypeStruct.new(
+    type: "triangle",
+    triangle_id: Integer,
+    position: Position
+  )
+  Square = TypeStruct.new(
+    type: "square",
+    square_id: Integer,
+    position: Position
+  )
+  Layer = TypeStruct.new(
+    figures: ArrayOf(Circle | Triangle | Square),
+  )
+  Picture = TypeStruct.new(
+    layers: ArrayOf(Layer),
+  )
+end
+>>>
+
+先ほどのプログラムを書きなおしてみます。
+
+<<<
+composition = Composition.new
+Type::Picture.from_hash(json).layers.each do |layer|
+  layer.figures.each do |figure|
+    case figure
+    when Type::Circle
+      circle = ::Circle.find(figure.circle_id)
+      image = circle.download
+      composition.add(image, figure.position)
+    when Type::Triangle
+      # ...
+    when Type::Square
+      # ...
+    end
+  end
+end
+composition.to_png
+>>>
+
+いかがでしょうか。
+
+* typoしてもすぐ気がつく(did_you_meanが効く)
+* Class名があるのでデバッグしやすい
+* 見た目がすっきりする
+* もしJSONが想定外の形式だった場合にエラーとして検知できる
+* case文が文字列からclass名になったのでtypoしてもNameErrorで気付ける
+
+TypeStruct導入によって上記のメリットが生まれました。
+
+! TypeStructの利用例
+
+ここではTypeStructが有効になる利用シーンや、具体的な導入方法を紹介します。
+
+!! JSON APIのサーバー側実装
+
+from_hashの説明と被ってしまうので要点だけ。
+
+複数人開発の場合は特に、「どんなkeyがあってどんな値がありえるのか、このkeyはnilになる可能性はあるのか」と言った情報が共有されているべきです。
+
+そこで、TypeStructで型情報を書いておけば正確なドキュメントにもStructとして使うための定義にもなります。
+
+また、既存のコードベースにTypeStructを導入する場合、いちいち型を書くのが面倒になるでしょう。
+この場合は自動で型コードを生成してくれるものがあると便利だろうと、generatorを書いてみました。
+
+以下のように使います。
+
+<<<
+$ echo '{"say": [{"hello": "world", "and": 4649}]}' | ruby -r type_struct/generator/json
+Say = TypeStruct.new(
+  hello: String,
+  and: Integer,
+)
+AutoGeneratedStruct = TypeStruct.new(
+  say: ArrayOf(Say),
+)
+>>>
+
+jsonの部分をyamlに変えることでyaml形式にも対応できます。
+
+実際のレスポンスをドキュメントやcurlの結果などからgeneratorに渡してやれば、
+自動的にTypeStructの型コードを生成してくれます。
+これをコピー&ペーストするなりして使うことで型を書く手間をある程度減らせるでしょう。
+
+!! JSON APIのクライアント側の実装
+
+JSONを受け取って処理するクライアント実装を書く場合では、
+Hashの問題は存在するものの、TypeStructを有効に使える機会は少ないでしょう。
+
+理由は大抵のWeb APIクライアント実装をRubyで行いたい場合は、特定のパブリックなサービスに対して行う場合が多いからです。
+
+* 仕様が公開されているため、あまり変わらない
+* Web APIのドキュメントが公開されていることが多い
+* ロジックは小規模になりやすい
+
+という場合がほとんどだからです。
+
+しかしながら、それでも便利に使っていただける可能性を考慮し、
+例としてドキュメントサービスで有名なesa.ioのAPIドキュメントを元にTypeStructの型コードを書いてみました。
+
+[[https://github.com/ksss/type\_struct-esa|https://github.com/ksss/type_struct-esa]]
+
+このようにWeb APIのレスポンスのTypeStructコードを書いておけば、
+レスポンスを使って整形して分解して……、などのコードが書きやすくなるでしょう。
+
+!! config.yml
+
+YAMLで書かれたなんらかの設定ファイルをアプリで独自に定義する場合にもTypeStructを活用できます。
+筆者が出会った経験談としては、何段にもネストするYAMLで書かれたconfigファイルを、
+作ったはいいがYAMLのインデントが一段ズレており不具合の原因になったというものでした。
+
+この事故も、TypeStructを使っていればもしかしたら防げたでしょう。
+
+<<<
+---
+foo:
+  bar:
+    baz:
+    - 1
+    - 2
+    - 3
+    qux: 'aaa' # 本当は一段左にあるべき行
+>>>
+
+<<<
+require 'yaml'
+require 'type_struct/ext'
+Bar = TypeStruct.new(
+  baz: ArrayOf(Integer),
+)
+Foo = TypeStruct.new(
+  bar: Bar,
+  qux: String,
+)
+Root = TypeStruct.new(
+  foo: Foo,
+)
+Root.from_hash(YAML.load_file("config.yml"))
+#=> TypeStruct::MultiTypeError:
+t.rb:13:in TypeError Foo#qux expect String got nil
+>>>
+
+既存の設定ファイルから型定義をつくる場合も、yamlのgeneratorを使うことで作りやすくなります。
+
+<<<
+$ cat config.yml | ruby -r type_struct/generator/yaml
+AutoGeneratedStruct = TypeStruct.new(
+  ...
+)
+>>>
+
+! おまけコラム Hash? Struct?
+
+TypeStructはStructをベースに拡張したclassです。
+筆者はRubyのStructが好きなのですが、RubyのHashが便利すぎるために一度も使用したことがない方も多いのではないでしょうか。
+そこで、どんな場合にStructが便利でどんな場合にHashが便利なのか、どうやって使い分ければよいのか考えてみました。
+
+「TypeStructを使うほどではないけど、Structは便利かもなあ」と思っていただければ幸いです。
+
+筆者の考えは「どんなkeyがあるか固定ならStruct、不定ならHash」です。
+
+Structのメリットは
+
+* class名が付いているのでデバッグしやすい
+* key名をtypoしても即座にわかるのでデバッグしやすい{{fn('Struct#[]にも対応する提案したのオレオレ https://github.com/yuki24/did_you_mean/pull/73')}}
+* メンバー呼び出しのsyntaxが書きやすい
+
+Hashのメリットは
+
+* リテラルがあるので生成syntaxが書きやすい
+* 未知のkeyでも格納できる
+* keyword argumentなど、言語組み込みの機能が豊富
+
+だと考えています。
+
+多分に主観が含まれてはいますが、これらの以下のメリットから導き出されます。
+
+(デバッグが必要になりそうなほど複雑 && 寿命の長いオブジェクト && keyが固定)なら、Structを使うことで、
+デバッグのしやすさや、メンバー呼び出しのコードの綺麗さといったメリットを享受できます。
+
+そして、(デバッグが不要なほど単純 || 寿命が短いオブジェクト || keyが不定)なら、
+Hashを使うことでリテラルや未知のkeyに対応しているといったメリットを享受できるということです。
+
+だいぶStructの利用条件は狭そうです。
+ほとんどのRubyistはHashの便利さはご存知だと思うので、Structが使えるシーンのみ紹介します。
+
+CLIアプリケーションのオプションを定義する場合を考えます。
+CLIのオプションは、Rubyのオブジェクトにまとめてアプリケーション内で扱うことが多いでしょう。
+ここで、CLIのオプションとしてどんなkeyがありえるのか、実装者自身は知っているはずです。
+こんなときはStructが便利です。
+
+<<<
+Option = Struct.new(
+  # オプションの種類
+  :aaa,
+  :bbb,
+  :ccc,
+)
+o = Option.new(
+  # オプションのデフォルト値
+  false, # aaa
+  1,     # bbb
+  'ccc', # ccc
+)
+OptionParser.new do |opt|
+  # オプションの設定
+  opt.on("--aaa AAA", "set aaa") do |arg|
+    o.aaa = arg
+  end
+end.parse!(ARGV)
+
+CLI.run(o)
+>>>
+
+としておけば、どんなオプションがあるのか、デフォルト値は何か、
+どのオプションに対応付けられているのかが読みやすいでしょう。
+こういったオプションは複雑なロジックの中に使われたり、
+コードの中での寿命が長くなりやすいので、Structのメリットを享受しやすいでしょう。
+また、Structはオブジェクトの生成がHashよりも高速というのもメリットでしょう。
+
+<<<
+#! /usr/bin/env ruby
+
+require 'benchmark/ips'
+
+class Foo < Struct.new(:a, :b, :c)
+end
+
+Benchmark.ips do |x|
+  x.report("Foo.new(1,2,3)") do
+    Foo.new(1,2,3)
+  end
+  x.report("{a: 1, b: 2, c: 3}") do
+    {a: 1, b: 2, c: 3}
+  end
+  x.compare!
+end
+>>>
+
+<<<
+$ ruby t.rb
+Warming up --------------------------------------
+      Foo.new(1,2,3)   231.971k i/100ms
+  {a: 1, b: 2, c: 3}   129.456k i/100ms
+Calculating -------------------------------------
+      Foo.new(1,2,3)      4.826M (± 5.9%) i/s -     24.125M in   5.018127s
+  {a: 1, b: 2, c: 3}      2.017M (± 9.3%) i/s -      9.968M in   5.003450s
+
+Comparison:
+      Foo.new(1,2,3):  4825587.7 i/s
+  {a: 1, b: 2, c: 3}:  2017008.2 i/s - 2.39x slower
+>>>

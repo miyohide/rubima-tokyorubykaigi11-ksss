@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "spellcheck-tech-word": true,
+    "no-mix-dearu-desumasu": true,
+    "common-misspellings": true,
+    "preset-ja-technical-writing": true,
+    "preset-japanese": true,
+    "preset-jtf-style": true,
+    "max-ten": {
+      "max": 5
+    }
+  }
+}
