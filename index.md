@@ -31,7 +31,7 @@ NewClassName = TypeStruct.new(
 )
 ```
 
-これで`NewClassName`というclassが定義さたことになります。
+これで`NewClassName`というclassが定義されたことになります。
 
 どこか他言語を想起させる形ですね。
 
